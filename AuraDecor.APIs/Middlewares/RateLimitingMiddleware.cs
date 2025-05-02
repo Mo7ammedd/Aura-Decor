@@ -174,11 +174,11 @@ public class RateLimitingMiddleware
             -- Return remaining requests and TTL
             return {1, limit - requestCount - 1, redis.call('TTL', key)}";
         
-        var result = (RedisResult[])await db.ScriptEvaluateAsync(
+        var result = (RedisResult[])(await db.ScriptEvaluateAsync(
             script,
             new RedisKey[] { key },
             new RedisValue[] { now.ToString(), windowStart.ToString(), limit.ToString(), windowSeconds.ToString() }
-        );
+        ))!;
         
         // Safer conversions to avoid overflow issues
         bool isAllowed = result[0].ToString() == "1";
