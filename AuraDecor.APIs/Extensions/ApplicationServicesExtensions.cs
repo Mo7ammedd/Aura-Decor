@@ -22,6 +22,8 @@ public static class ApplicationServicesExtensions
         services.AddScoped<IFurnitureService, FurnitureService>();
         services.AddScoped<IRoleService, RoleService>();
         services.AddScoped<ICartService, CartService>();
+        services.AddScoped<IOrderService, OrderService>();
+
         services.AddScoped<IResponseCacheService, ResponseCacheService>();
         services.AddSingleton<IEmailService, EmailService>();
 
