@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using AuraDecor.Core.Specifications.CartSpecification;
 
 namespace AuraDecor.Servicies
 {
@@ -27,8 +28,8 @@ namespace AuraDecor.Servicies
 
         public async Task<Order> CreateOrderAsync(string userId, Guid cartId)
         {
-            var cart = await _unitOfWork.Repository<Cart>().GetByIdAsync(cartId);
-
+            var cartSpec = new CartWithItemsByIdSpecification(cartId);
+            var cart = await _unitOfWork.Repository<Cart>().GetWithSpecAsync(cartSpec);
             if (cart == null || cart.UserId != userId || !cart.CartItems.Any())
                 throw new Exception("cart is not valid");
 
