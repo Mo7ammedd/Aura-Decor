@@ -10,7 +10,7 @@ public class RefreshToken : BaseEntity
     public string UserId { get; set; }
     public string JwtId { get; set; }    
     public bool IsRevoked { get; set; }  
-    public string ReplacedByToken { get; set; }  
+    public string? ReplacedByToken { get; set; }  
     public bool IsExpired => DateTime.UtcNow >= Expires;
     public bool IsActive => !IsExpired;
 }
