@@ -46,9 +46,15 @@ public class AccountController : ApiBaseController
             }
 
             var result = await _signInManager.CheckPasswordSignInAsync(user, loginDto.Password, false);
+            
             if (!result.Succeeded)
             {
                 return Unauthorized(new ApiResponse(401));
+            }
+
+            if (user.TwoFactorEnabled)
+            {
+                return StatusCode(StatusCodes.Status202Accepted, new { IsTwoFactorRequired = true, Message = "Two-factor authentication required" });
             }
 
             var token = await _authService.CreateTokenAsync(user, _userManager);
@@ -458,5 +464,122 @@ public class AccountController : ApiBaseController
             return Ok();
         }
 
-           
+        [Authorize]
+        [HttpGet("2fa/setup")]
+        public async Task<ActionResult<TwoFactorEnabledResponseDto>> GetTwoFactorSetup()
+        {
+            var user = await _userManager.FindByEmailAsync(User.FindFirstValue(ClaimTypes.Email));
+            if (user == null) return NotFound(new ApiResponse(404, "User not found"));
+
+            var key = await _userManager.GetAuthenticatorKeyAsync(user);
+            if (string.IsNullOrEmpty(key))
+            {
+                await _userManager.ResetAuthenticatorKeyAsync(user);
+                key = await _userManager.GetAuthenticatorKeyAsync(user);
+            }
+
+            var email = user.Email;
+            var appName = "AuraDecor";
+            var uri = string.Format("otpauth://totp/{0}:{1}?secret={2}&issuer={0}&digits=6", appName, email, key);
+
+            // Generate QR code as Base64
+            using var qrGenerator = new QRCoder.QRCodeGenerator();
+            using var qrCodeData = qrGenerator.CreateQrCode(uri, QRCoder.QRCodeGenerator.ECCLevel.Q);
+            using var qrCode = new QRCoder.PngByteQRCode(qrCodeData);
+            var qrCodeBytes = qrCode.GetGraphic(20);
+            var qrCodeBase64 = Convert.ToBase64String(qrCodeBytes);
+
+            return new TwoFactorEnabledResponseDto
+            {
+                SharedKey = key,
+                AuthenticatorUri = uri,
+                QrCodeBase64 = $"data:image/png;base64,{qrCodeBase64}"
+            };
+        }
+
+        [Authorize]
+        [HttpPost("2fa/enable")]
+        public async Task<ActionResult<AuthResponseDto>> EnableTwoFactor([FromBody] TwoFactorDto twoFactorDto)
+        {
+            var user = await _userManager.FindByEmailAsync(User.FindFirstValue(ClaimTypes.Email));
+            if (user == null) return NotFound(new ApiResponse(404, "User not found"));
+
+            var verificationCode = twoFactorDto.Code.Replace(" ", string.Empty).Replace("-", string.Empty);
+            var is2faTokenValid = await _userManager.VerifyTwoFactorTokenAsync(
+                user, _userManager.Options.Tokens.AuthenticatorTokenProvider, verificationCode);
+
+            if (!is2faTokenValid)
+            {
+                return BadRequest(new ApiResponse(400, "Invalid verification code"));
+            }
+
+            await _userManager.SetTwoFactorEnabledAsync(user, true);
+            
+            return Ok(new ApiResponse(200, "Two-factor authentication enabled"));
+        }
+
+        [Authorize]
+        [HttpPost("2fa/disable")]
+        public async Task<ActionResult> DisableTwoFactor()
+        {
+            var user = await _userManager.FindByEmailAsync(User.FindFirstValue(ClaimTypes.Email));
+            if (user == null) return NotFound(new ApiResponse(404, "User not found"));
+
+            var result = await _userManager.SetTwoFactorEnabledAsync(user, false);
+            if (!result.Succeeded)
+            {
+                return BadRequest(new ApiResponse(400, "Failed to disable 2FA"));
+            }
+
+            return Ok(new ApiResponse(200, "Two-factor authentication disabled"));
+        }
+
+        [HttpPost("login-2fa")]
+        public async Task<ActionResult<AuthResponseDto>> LoginWithTwoFactor([FromBody] TwoFactorLoginDto loginDto)
+        {
+            var user = await _userManager.FindByEmailAsync(loginDto.Email);
+            if (user == null) return Unauthorized(new ApiResponse(401));
+
+            if (!user.TwoFactorEnabled)
+            {
+                 return BadRequest(new ApiResponse(400, "Two-factor authentication is not enabled for this user"));
+            }
+
+            // Verify password first
+            var passwordCheck = await _signInManager.CheckPasswordSignInAsync(user, loginDto.Password, false);
+            if (!passwordCheck.Succeeded)
+            {
+                return Unauthorized(new ApiResponse(401, "Invalid credentials"));
+            }
+
+            // Then verify 2FA code
+            var verificationCode = loginDto.Code.Replace(" ", string.Empty).Replace("-", string.Empty);
+            var isValid = await _userManager.VerifyTwoFactorTokenAsync(
+                user, _userManager.Options.Tokens.AuthenticatorTokenProvider, verificationCode);
+
+            if (!isValid)
+            {
+                return Unauthorized(new ApiResponse(401, "Invalid 2FA code"));
+            }
+
+            var token = await _authService.CreateTokenAsync(user, _userManager);
+            
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var jwtToken = tokenHandler.ReadJwtToken(token);
+            var jwtId = jwtToken.Id;
+            
+            var refreshToken = await _authService.GenerateRefreshTokenAsync(user.Id, jwtId);
+            
+            await _authService.StoreRefreshTokenAsync(refreshToken);
+            
+            return new AuthResponseDto
+            {
+                DisplayName = user.DisplayName,
+                Email = user.Email,
+                Phone = user.PhoneNumber,
+                Token = token,
+                RefreshToken = refreshToken.Token,
+                RefreshTokenExpiry = refreshToken.Expires
+            };
+        }
 }
